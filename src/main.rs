@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Simple program to process a file
@@ -20,6 +20,8 @@ enum TransactionType {
     Chargeback,
 }
 
+// This could probably have custom Serialize/Deserialize implemented to avoid having to using
+// {d,}serialize_with everywhere.
 type Amount = fixed::types::I50F14;
 type ClientId = u16;
 type TransactionId = u32;
@@ -35,15 +37,32 @@ struct Transaction {
 }
 
 /// Record format to match specification. Many of the fields can be derived from working state.
+#[derive(Serialize)]
 struct OutputRecord {
     client: ClientId,
+    #[serde(serialize_with = "serialize_fixed")]
     available: Amount,
+    #[serde(serialize_with = "serialize_fixed")]
     held: Amount,
+    #[serde(serialize_with = "serialize_fixed")]
+    total: Amount,
     locked: bool,
 }
 
+impl OutputRecord {
+    fn from_account(account: Account, client: ClientId) -> Self {
+        Self {
+            client,
+            available: account.available(),
+            held: account.held,
+            locked: account.locked,
+            total: account.total,
+        }
+    }
+}
+
 /// Working account state. ID is used to locate this and not duplicated internally.
-#[derive(Default)]
+#[derive(Default, Clone,PartialEq)]
 struct Account {
     locked: bool,
     total: Amount,
@@ -55,28 +74,37 @@ impl Account {
     fn available(&self) -> Amount {
         self.total - self.held
     }
+    fn unused(&self) -> bool {
+        self == &Self::default()
+    }
 }
 
 /// Transaction state required for future transactions. We only need the amount for now.
 type TransactionHistory = HashMap<TransactionId, Amount>;
 
+/// A lose collection of fields required to process transactions. I'd move more into the impl but we
+/// need separate mutable and immutable references.
 struct Engine {
     txs: TransactionHistory,
-    accounts: [Account; 1_usize << ClientId::BITS],
+    // Fixed size array since client IDs are only 16 bit. I tried to use an array but Rust tried to
+    // put it on the stack and overflowed it. It's fine on the heap anyway.
+    accounts: Vec<Account>,
 }
 
 impl Engine {
     fn new() -> Self {
         Self {
-            accounts: std::array::from_fn(|_| Default::default()),
+            accounts: vec![Default::default(); 1_usize << ClientId::BITS],
             txs: Default::default(),
         }
     }
 }
 
+/// Apply transactions to set of accounts.
 fn process_transaction(
     accounts: &mut [Account],
     record: Transaction,
+    // I separated this out to avoid incompatible references to Engine. It's good abstraction anyway.
     get_tx_amount: impl Fn(&TransactionId) -> Option<Amount>,
 ) {
     use TransactionType::*;
@@ -110,6 +138,7 @@ fn process_transaction(
     }
 }
 
+// Abstract over getting amount from a historical transaction.
 fn get_tx_amount(history: &TransactionHistory, id: &TransactionId) -> Option<Amount> {
     history.get(id).copied()
 }
@@ -128,8 +157,19 @@ fn main() -> Result<()> {
             get_tx_amount(&engine.txs, id)
         });
     }
+    let mut writer = csv::Writer::from_writer(std::io::stdout());
+    for (client_id, account) in engine.accounts.into_iter().enumerate() {
+        if account.unused() {
+            continue;
+        }
+        let record = OutputRecord::from_account(account, client_id.try_into()?);
+        writer.serialize(record)?;
+    }
     Ok(())
 }
+
+// Helpers to serialize fixed integer Amounts as strings as expected. Looks like there is some
+// features in the fixed crate that could maybe make this unnecessary.
 
 fn deserialize_fixed<'de, D>(deserializer: D) -> Result<Amount, D::Error>
 where
@@ -143,4 +183,14 @@ where
     let value = Amount::from_str(&s).map_err(serde::de::Error::custom)?;
 
     Ok(value)
+}
+
+// Serialization function
+fn serialize_fixed<S>(fixed: &Amount, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    // Convert to string with desired precision
+    let s = fixed.to_string();
+    serializer.serialize_str(&s)
 }
