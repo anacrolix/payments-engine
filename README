@@ -1,3 +1,5 @@
 Haven't handled unexpected precision in transactions (yet).
 
 Used fixed for finite and fixed precision due to financial requirements. We have 50 bits for the integer part, which should be plenty, but what's more important is that we don't skew the fractional part over time.
+
+I was avoiding an Engine instance but when I needed to backtrack transactions efficiently and not inline lookups and abstract over the representation, it became somewhat unavoidable. Plus I know for testing I'll need it without going through main.
