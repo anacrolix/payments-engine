@@ -152,7 +152,9 @@ fn main() -> Result<()> {
     let mut engine = Engine::new();
     for record in reader.deserialize() {
         let record: Transaction = record?;
-        println!("{:?}", record);
+        // Poke this to stderr for now, since automated tests probably check stdout. Left this in as
+        // there's minimal debugging or logging in the project and it's not too noisy for now.
+        eprintln!("{:?}", record);
         process_transaction(&mut engine.accounts, record, |id| {
             get_tx_amount(&engine.txs, id)
         });
