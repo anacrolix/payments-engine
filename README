@@ -1,5 +1,27 @@
-Haven't handled unexpected precision in transactions (yet).
-
 Used fixed for finite and fixed precision due to financial requirements. We have 50 bits for the integer part, which should be plenty, but what's more important is that we don't skew the fractional part over time.
 
-I was avoiding an Engine instance but when I needed to backtrack transactions efficiently and not inline lookups and abstract over the representation, it became somewhat unavoidable. Plus I know for testing I'll need it without going through main.
+I was avoiding an Engine instance but when I needed to backtrack transactions efficiently and not inline lookups and abstract over the representation, it became somewhat unavoidable. Plus I know for testing I'll need it without going through main. The transaction processing in main needs to be moved out so it can be called from some unit tests.
+
+Unit tests would want to check that the internal representation is correct for some cases, but also check that the output CSV is correct for some corner cases like weird precision.
+
+I took advantage of the fact that client IDs are 16 bit and kept it contiguous in memory. I lazily added a filter to not output accounts that were the same as the "empty" value. If you ran a test that added to an account then drained it completely it might get skipped in the output.
+
+I don't check that transaction IDs are unique.
+
+I record only the amount of historical transactions because that's the only field we need for future checks. I expect this would grow in a larger implementation, and there might be a better way than keeping it memory.
+
+Unhandled precision is ignored, but expected level of precision should be preserved. I did add a small test case to see what the fixed crate does with it by default. It didn't provide a nice wrapper that panics or errors on lost precision, and the spec ignores this kind of thing for other cases. I would make a wrapper that ensure precision was correct at all points.
+
+Errors should be emitted somewhere rather than dropped. Even if they're discarded by default. Again, toy example.
+
+I ran out of time for testing. There needs to be a complete test of disputes, resolves, and chargebacks. Because the error case is checked for by seeing subsequent transactions are ignored because values are out of bounds. There's quite a few permutations that need to be checked, it would probably take as long as it did to write the code to test them all.
+
+I deserialize client IDs into a 16 bit field, but it's possible it could cause a crash as I use this to index into the Vec of accounts. Some testing on the edge cases would handle this.
+
+I've set it up to stream with the info in the spec provided. I don't stream transaction amounts, and looking those up by rereferencing the file would be much slower with the info that is provided. So those are stored in memory.
+
+If transactions streamed in concurrently, they would have constraints around ordering if they referenced accounts in other streams. There'd potentially be some locking or other careful synchronization involved. Obviously streaming CSVs isn't the most efficient way to do things but there are plenty of other things that could be worse.
+
+The code is fairly straight forward. I wasn't happy with serialize_with, I'd probably end up newtyping or making my own Amount type. There is too much unclear handling in the fixed crate that it was quickly becoming an issue. Unless fancy mixed precision handling is required I would just throw it away when requirements become clear. I started to collect some parts into Engine, but again, more requirements need to be known before it's clear what direction to take with the design.
+
+I used anyhow and clap. Both are very good crates for their respective purposes. Both are probably overkill here, I think I only ended up having a single error case in main, and only parse a single positional argument. But it does make expanding the project trivial.
